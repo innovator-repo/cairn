@@ -13,7 +13,7 @@ the project's "Daily tracker app spec" document.
 
 1. **Today, reminders, tasks, momentum, weekly analysis** (this branch)
 2. Sleep lock 22:00 to 08:00 for the personal profile (work profile untouched), relapse guard with an allow-list
-3. Pattern puzzles generated every day
+3. Pattern puzzles generated every day: built as its own app, Katachi, on `clean/katachi`; it fills in the "Pattern puzzles" count here
 4. Import from the Habits app
 
 ## Build
