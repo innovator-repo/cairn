@@ -1,0 +1,50 @@
+name: Cairn APK
+
+# Every push to the Cairn branch builds the debug APK, runs the unit tests and attaches the APK to the
+# "cairn-latest" release, so the download link never changes.
+on:
+  push:
+    branches: [clean/cairn]
+    paths: ["cairn-android/**", ".github/workflows/cairn-apk.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: cairn-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: cairn-android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-35 build-tools;35.0.0"
+      - name: Unit tests and debug build
+        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon
+      - name: Name the APK
+        run: |
+          VERSION="$(grep -o 'versionName = "[^"]*"' app/build.gradle.kts | cut -d'"' -f2)"
+          mkdir -p out && cp app/build/outputs/apk/debug/app-debug.apk "out/Cairn-$VERSION-debug.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cairn-debug
+          path: cairn-android/out/*.apk
+      - name: Publish to the cairn-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view cairn-latest >/dev/null 2>&1 || gh release create cairn-latest --prerelease \
+            --title "Cairn latest build" --notes "Newest debug build. The file name says the version."
+          gh release upload cairn-latest out/*.apk --clobber
