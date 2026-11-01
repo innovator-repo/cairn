@@ -1,5 +1,6 @@
 package app.cairn.data
 
+import app.cairn.search.FullTextIndex
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -14,6 +15,7 @@ class NoteStore(private val root: File, private val clock: () -> Long = System::
     private val notesDir = File(root, "notes")
     private val indexFile = File(root, "index.json")
     private val githubFile = File(root, "github.json")
+    private val githubDocsFile = File(root, "github-docs.bin")
     private val seededMarker = File(root, ".seeded")
 
     init { root.mkdirs() }
@@ -80,7 +82,12 @@ class NoteStore(private val root: File, private val clock: () -> Long = System::
         githubFile.writeText(encode(entries).toString())
     }
 
-    fun clearGithub() { githubFile.delete() }
+    /** Full text of repos, issues and files, for search. Kept apart from the map entries. */
+    fun saveGithubIndex(index: FullTextIndex) { index.save(githubDocsFile) }
+
+    fun loadGithubIndex(): FullTextIndex = FullTextIndex.load(githubDocsFile)
+
+    fun clearGithub() { githubFile.delete(); githubDocsFile.delete() }
 
     /** Directory that backups pack and restore. */
     fun dataRoot(): File = root
@@ -115,7 +122,7 @@ class NoteStore(private val root: File, private val clock: () -> Long = System::
 
     companion object {
         const val DAY = 86_400_000L
-        const val TEXT_LIMIT = 2000
+        const val TEXT_LIMIT = 20000
 
         fun compose(title: String, body: String) = "# ${title.trim()}\n\n${body.trim()}\n"
 

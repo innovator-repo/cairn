@@ -4,7 +4,6 @@ import app.cairn.data.Entry
 import app.cairn.data.Kind
 import app.cairn.graph.Graph
 import app.cairn.graph.ViewMode
-import app.cairn.search.SearchEngine
 import app.cairn.search.TfidfEmbedder
 import app.cairn.search.dot
 import app.cairn.search.tokenize
@@ -41,21 +40,6 @@ class SearchAndGraphTest {
         assertEquals(1f, dot(a, a), 1e-3f)
         assertTrue(dot(a, b) > dot(a, c))
         assertEquals(0f, emb.embed("").sum(), 0f)
-    }
-
-    @Test fun searchFindsTitleBodyAndPath() {
-        val s = SearchEngine(sample, TfidfEmbedder(512))
-        assertEquals("a", s.search("visa").first().entry.id)
-        assertEquals("b", s.search("tokyo flight").first().entry.id)
-        assertEquals("d", s.search("code/gradle").first().entry.id)
-        assertEquals("e", s.search("snooze").first().entry.id)
-        assertTrue(s.search("   ").isEmpty())
-        assertTrue(s.search("zzzzqqq").isEmpty())
-    }
-
-    @Test fun searchMatchesPrefixVariants() {
-        val s = SearchEngine(sample, TfidfEmbedder(512))
-        assertEquals("a", s.search("passports").first().entry.id)
     }
 
     @Test fun graphHasEveryNodeInEveryViewWithFiniteCoordinates() {

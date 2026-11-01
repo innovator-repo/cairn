@@ -25,6 +25,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -87,6 +88,17 @@ fun SettingsScreen(vm: CairnViewModel, onBack: () -> Unit) {
                 }
             }
 
+            if (vm.hasToken) Section("Repository files") {
+                Text("Choose which repositories have their text files indexed for search (up to 40 small files each, no vendored or built folders). Takes effect on the next sync.", color = c.inkSecondary, style = MaterialTheme.typography.bodyMedium)
+                val repos = vm.repos()
+                if (repos.isEmpty()) Text("Sync GitHub to list your repositories.", color = c.inkSecondary, style = MaterialTheme.typography.labelMedium)
+                for (r in repos) Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                    KindIcon(r.kind, c.inkSecondary)
+                    Text(r.path, Modifier.weight(1f).padding(horizontal = 10.dp), color = c.ink, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Switch(checked = r.path !in vm.skipFiles, onCheckedChange = { vm.setFilesIndexed(r.path, it) })
+                }
+            }
+
             Section("Backup") {
                 Text("One encrypted file with all your notes and the GitHub index. Restore it on a new phone with the same passphrase. The token is not included.", color = c.inkSecondary, style = MaterialTheme.typography.bodyMedium)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -94,8 +106,14 @@ fun SettingsScreen(vm: CairnViewModel, onBack: () -> Unit) {
                     Pill("Restore", { restore.launch(arrayOf("*/*")) })
                 }
             }
+            Section("Developer") {
+                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Show frame times on the map", Modifier.weight(1f), color = c.ink, style = MaterialTheme.typography.bodyMedium)
+                    Switch(checked = vm.showFrameTimes, onCheckedChange = { vm.setFrameTimes(it) })
+                }
+            }
             if (vm.message.isNotBlank()) Text(vm.message, color = c.ink, style = MaterialTheme.typography.bodyMedium)
-            Text("Cairn 0.1.0 · notes stay on this phone", color = c.inkSecondary, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 24.dp))
+            Text("Cairn 0.2.0 · notes stay on this phone", color = c.inkSecondary, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 24.dp))
         }
     }
 

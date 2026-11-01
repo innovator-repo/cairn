@@ -1,8 +1,15 @@
 package app.cairn.data
 
-/** What a node is. The map draws each kind with its own shape. */
-enum class Kind(val label: String) {
-    NOTE("note"), REPO("repo"), FILE("file"), ISSUE("issue"), LINK("link");
+/** The one shape each kind is drawn with, everywhere (map, legend, search results, cards, lists). */
+enum class Shape { CIRCLE, SQUARE, PAGE, TRIANGLE, DIAMOND }
+
+/** What a node is. */
+enum class Kind(val label: String, val shape: Shape) {
+    NOTE("note", Shape.CIRCLE),
+    REPO("repo", Shape.SQUARE),
+    FILE("file", Shape.PAGE),
+    ISSUE("issue", Shape.TRIANGLE),
+    LINK("link", Shape.DIAMOND);
 
     companion object {
         fun parse(s: String?): Kind = entries.firstOrNull { it.name.equals(s, ignoreCase = true) } ?: NOTE
@@ -10,8 +17,8 @@ enum class Kind(val label: String) {
 }
 
 /**
- * One thing in the brain: a note, a repo, an issue. [text] is what search reads (the note body or
- * README, trimmed). [url] is set for items that live on the web and open in the browser.
+ * One thing in the brain: a note, a repo, an issue, a file. [text] is a short excerpt for cards and
+ * link building; full text for search lives in the full-text index. [url] is set for items on the web.
  */
 data class Entry(
     val id: String,
@@ -23,7 +30,6 @@ data class Entry(
     val updatedAt: Long,
     val url: String? = null,
 ) {
-    val isNote: Boolean get() = kind == Kind.NOTE || kind == Kind.LINK
-    /** Title, path and body as one string, the thing the embedder sees. */
+    /** Title, path and excerpt as one string, the thing the link embedder sees. */
     val searchable: String get() = "$title $title $path $text"
 }

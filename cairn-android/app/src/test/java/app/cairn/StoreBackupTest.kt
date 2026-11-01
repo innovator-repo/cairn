@@ -21,7 +21,7 @@ class StoreBackupTest {
         val store = NoteStore(root)
         store.seedIfFirstRun()
         val notes = store.loadNotes()
-        assertTrue(notes.size >= 10)
+        assertTrue(notes.size >= 150)
         assertTrue(notes.all { it.path.startsWith("notes/") && java.io.File(root, it.path).isFile })
         assertTrue(java.io.File(root, "index.json").isFile)
         assertTrue(notes.any { it.kind == Kind.LINK })
@@ -62,7 +62,7 @@ class StoreBackupTest {
 
     @Test fun githubIndexIsSeparateAndClearable() {
         val store = NoteStore(tmp.newFolder("d"))
-        val items = GitHubSync.parseRepos("""[{"full_name":"o/r","name":"r","description":null,"pushed_at":"2024-05-01T10:00:00Z","html_url":"https://github.com/o/r"}]""")
+        val items = GitHubSync.parseRepos("""[{"full_name":"o/r","name":"r","description":null,"pushed_at":"2024-05-01T10:00:00Z","html_url":"https://github.com/o/r"}]""").map { it.entry }
         store.saveGithub(items)
         assertEquals(1, store.loadGithub().size)
         assertEquals("", store.loadGithub().first().text)
@@ -77,17 +77,18 @@ class StoreBackupTest {
         ]"""
         val issues = GitHubSync.parseIssues(json, "o/r")
         assertEquals(1, issues.size)
-        assertEquals("#8 Add N4 list", issues[0].title)
-        assertEquals("o/r#8", issues[0].path)
-        assertEquals(Kind.ISSUE, issues[0].kind)
-        assertTrue(issues[0].text.startsWith("words more"))
+        assertEquals("#8 Add N4 list", issues[0].first.title)
+        assertEquals("o/r#8", issues[0].first.path)
+        assertEquals(Kind.ISSUE, issues[0].first.kind)
+        assertTrue(issues[0].first.text.startsWith("words more"))
+        assertTrue(issues[0].second.contains("more"))
     }
 
     @Test fun backupRoundTripRestoresNotes() {
         val src = tmp.newFolder("src")
         val a = NoteStore(src)
         a.seedIfFirstRun()
-        a.saveGithub(GitHubSync.parseRepos("""[{"full_name":"o/r","name":"r","description":"d","pushed_at":"2024-05-01T10:00:00Z"}]"""))
+        a.saveGithub(GitHubSync.parseRepos("""[{"full_name":"o/r","name":"r","description":"d","pushed_at":"2024-05-01T10:00:00Z"}]""").map { it.entry })
         val before = a.loadNotes().map { it.title }.sorted()
         val file = Backup.encrypt(Backup.pack(src), "correct horse".toCharArray(), iterations = 1000)
 

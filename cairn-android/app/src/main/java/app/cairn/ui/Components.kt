@@ -7,11 +7,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -28,14 +28,14 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.unit.dp
 
-/** A rounded pill: a shortcut chip, a view switch or an area filter. 48 dp tall to tap. */
+/** A rounded pill: a shortcut chip, a view switch or an area filter. 48 dp tall to tap. [swatch] marks an area colour. */
 @Composable
 fun Pill(
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     selected: Boolean = false,
-    dot: Color? = null,
+    swatch: Color? = null,
     filled: Boolean = false,
 ) {
     val c = LocalCairnColors.current
@@ -52,7 +52,8 @@ fun Pill(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (dot != null) Box(Modifier.size(9.dp).background(dot, CircleShape))
+            // An area colour is a short bar, so it never reads as one of the kind shapes.
+            if (swatch != null) Box(Modifier.width(14.dp).height(4.dp).background(swatch, RoundedCornerShape(2.dp)))
             Text(label, color = fg, style = MaterialTheme.typography.labelLarge)
         }
     }
@@ -64,9 +65,7 @@ fun Emblem(modifier: Modifier = Modifier) {
     val c = LocalCairnColors.current
     Canvas(modifier.size(28.dp).semantics { contentDescription = "Cairn" }) {
         val w = size.width
-        val stones = listOf(
-            Triple(.78f, .30f, .70f), Triple(.56f, .26f, .42f), Triple(.34f, .22f, .16f),
-        )
+        val stones = listOf(Triple(.78f, .30f, .70f), Triple(.56f, .26f, .42f), Triple(.34f, .22f, .16f))
         for ((i, s) in stones.withIndex()) {
             val sw = w * s.first; val sh = w * s.second
             val col = if (i == 2) c.accent else c.inkSecondary
@@ -74,4 +73,3 @@ fun Emblem(modifier: Modifier = Modifier) {
         }
     }
 }
-

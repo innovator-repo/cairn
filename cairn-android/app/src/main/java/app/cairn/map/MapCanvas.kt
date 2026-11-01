@@ -1,10 +1,15 @@
 package app.cairn.map
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateRotation
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -12,27 +17,33 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.sp
-import app.cairn.data.Kind
+import app.cairn.graph.Graph
 import app.cairn.graph.ViewMode
+import app.cairn.ui.drawKindGlyph
+import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.hypot
-import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.sqrt
 
 /** Colours the canvas needs from the theme. */
 class MapColors(val surface: Color, val hairline: Color, val ink: Color, val inkSecondary: Color)
 
 /**
- * The map. Flat, solid node colours on the page background: no glow, no stars, no orbit rings.
- * The only soft thing is a faint halo behind the selected node.
+ * The map. Flat, solid node colours on the page background: no glow, no stars. Only thin low-alpha
+ * guide lines and a faint halo behind the selected node. Gestures: drag turns or pans with
+ * inertia, pinch zooms about the fingers, two fingers twist, double-tap zooms in.
  */
 @Composable
 fun MapCanvas(
@@ -42,207 +53,256 @@ fun MapCanvas(
     onTapEmpty: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val measurer = rememberTextMeasurer()
-    val tmp = remember { FloatArray(3) }
-    val shape = remember { Path() }
+    val measurer = rememberTextMeasurer(cacheSize = 96)
+    val styles = remember(colors) { Styles(colors) }
+    val path = remember { Path() }
+    val t5 = remember { FloatArray(5) }
+    val t5b = remember { FloatArray(5) }
+
+    // Inertia and the idle turn. Only runs while animations are enabled.
+    LaunchedEffect(c, c.animate) {
+        if (!c.animate) return@LaunchedEffect
+        var last = 0L
+        while (true) {
+            androidx.compose.runtime.withFrameNanos { t ->
+                val dt = if (last == 0L) 0f else ((t - last) / 1e9f).coerceAtMost(0.05f)
+                last = t
+                c.tick(dt)
+            }
+        }
+    }
+
     Canvas(
         modifier = modifier
             .fillMaxSize()
-            .semantics { contentDescription = "Brain map. Drag to turn or pan, pinch to zoom, tap a point for details." }
+            .testTag("map")
+            .semantics { contentDescription = "Brain map. Drag to turn or pan, pinch to zoom, twist to rotate, double-tap to zoom in, tap a point for details." }
             .pointerInput(c) {
-                detectTransformGestures { centroid, pan, zoom, _ ->
-                    if (zoom != 1f) c.pinch(zoom, centroid.x - size.width / 2f, centroid.y - size.height / 2f)
-                    if (pan != Offset.Zero) c.drag(pan.x, pan.y)
-                }
-            }
-            .pointerInput(c) {
-                detectTapGestures { p ->
-                    val hit = hitTest(c, p, size.width.toFloat(), size.height.toFloat(), density, tmp)
-                    if (hit >= 0) onTapNode(hit) else onTapEmpty()
+                val slop = viewConfiguration.touchSlop
+                var lastTapT = 0L
+                var lastTap = Offset.Zero
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    c.touchDown()
+                    val vt = VelocityTracker()
+                    vt.addPosition(down.uptimeMillis, down.position)
+                    var moved = false
+                    var multi = false
+                    var travelled = Offset.Zero
+                    var ev: PointerEvent
+                    do {
+                        ev = awaitPointerEvent()
+                        if (ev.changes.count { it.pressed } > 1) multi = true
+                        val z = ev.calculateZoom(); val p = ev.calculatePan()
+                        val r = ev.calculateRotation(); val cen = ev.calculateCentroid()
+                        if (!moved) {
+                            travelled += p
+                            if (travelled.getDistance() > slop || abs(z - 1f) > 0.02f || abs(r) > 2f) moved = true
+                        }
+                        if (moved) {
+                            if (z != 1f) c.pinch(z, cen.x - size.width / 2f, cen.y - size.height / 2f)
+                            if (multi && r != 0f) c.twist(r * (PI.toFloat() / 180f))
+                            if (p != Offset.Zero) c.drag(p.x, p.y)
+                            ev.changes.firstOrNull()?.let { vt.addPosition(it.uptimeMillis, it.position) }
+                            ev.changes.forEach { if (it.positionChanged()) it.consume() }
+                        }
+                    } while (ev.changes.any { it.pressed })
+                    if (moved) {
+                        val v = vt.calculateVelocity()
+                        c.touchUp(if (multi) 0f else v.x, if (multi) 0f else v.y)
+                    } else {
+                        c.touchUp(0f, 0f)
+                        val pos = down.position
+                        val hit = c.scene.hit(pos.x, pos.y, density)
+                        val dbl = down.uptimeMillis - lastTapT < 300 && (pos - lastTap).getDistance() < 48f * density
+                        if (dbl) {
+                            lastTapT = 0L
+                            if (hit >= 0) c.zoomToNode(hit) else c.zoomAt(pos.x - size.width / 2f, pos.y - size.height / 2f)
+                        } else {
+                            lastTapT = down.uptimeMillis; lastTap = pos
+                            if (hit >= 0) onTapNode(hit) else onTapEmpty()
+                        }
+                    }
                 }
             },
     ) {
-        c.viewSize = min(size.width, size.height)
-        drawMap(c, colors, measurer, tmp, shape)
+        val t0 = System.nanoTime()
+        c.scene.frame(c, size.width, size.height, density)
+        drawScene(c, colors, styles, measurer, path, t5, t5b)
+        c.recordDraw(System.nanoTime() - t0)
+        if (c.debug) drawDebug(c, styles, measurer)
     }
 }
 
-private fun nodeRadius(c: MapController, i: Int, density: Float): Float {
-    val deg = c.graph.degree[i]
-    return (3.2f + min(7f, deg * 1.15f)) * (0.75f + c.zoom * 0.35f) * density * 0.95f
+/** Text styles made once per theme; sizes are stepped so the text layout cache keeps hitting. */
+private class Styles(val colors: MapColors) {
+    val ink = Array(4) { TextStyle(fontSize = (10 + it).sp, color = colors.ink) }
+    val sec = Array(4) { TextStyle(fontSize = (10 + it).sp, color = colors.inkSecondary) }
+    val detail = Array(4) { TextStyle(fontSize = (9 + it).sp, color = colors.inkSecondary) }
+    val cluster = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = colors.ink)
+    val count = TextStyle(fontSize = 11.sp, color = colors.inkSecondary)
+    val guide = TextStyle(fontSize = 10.sp, color = colors.inkSecondary)
+    val debug = TextStyle(fontSize = 10.sp, color = colors.ink)
+    val linkLabel = TextStyle(fontSize = 9.sp, color = colors.inkSecondary)
 }
 
-/** How visible node [z] is: faded when it faces away on the globe. */
-private fun visibility(globeMix: Float, depth: Float): Float {
-    val away = ((0.05f - depth) / 0.2f).coerceIn(0f, 1f)
-    return 1f - globeMix * away
-}
+private val KIND_RINGS = floatArrayOf(.38f, .58f, .76f, .9f, 1.06f)
+private val KIND_RING_NAMES = arrayOf("note", "repo", "file", "issue", "link")
 
-private fun hitTest(c: MapController, p: Offset, w: Float, h: Float, density: Float, tmp: FloatArray): Int {
-    var best = -1
-    var bestD = Float.MAX_VALUE
-    for (i in 0 until c.graph.size) {
-        if (c.isolated >= 0 && c.graph.areaIndex[i] != c.isolated) continue
-        c.position(i, tmp)
-        Projection.toScreen(tmp[0], tmp[1], tmp[2], c.yaw, c.pitch, c.zoom, w, h, c.panX, c.panY, tmp)
-        if (visibility(c.globeMix, tmp[2]) < 0.5f) continue
-        val d = hypot(tmp[0] - p.x, tmp[1] - p.y)
-        if (d < max(24f * density, nodeRadius(c, i, density) + 10f * density) && d < bestD) { bestD = d; best = i }
-    }
-    return best
-}
-
-private fun DrawScope.drawKind(kind: Kind, x: Float, y: Float, r: Float, color: Color, alpha: Float, shape: Path) {
-    when (kind) {
-        Kind.NOTE -> drawCircle(color, r, Offset(x, y), alpha)
-        Kind.REPO -> drawRect(color, Offset(x - r, y - r), androidx.compose.ui.geometry.Size(2 * r, 2 * r), alpha)
-        Kind.FILE -> drawRect(color, Offset(x - r * .75f, y - r * .75f), androidx.compose.ui.geometry.Size(r * 1.5f, r * 1.5f), alpha)
-        Kind.ISSUE -> {
-            shape.rewind()
-            shape.moveTo(x, y - r * 1.25f); shape.lineTo(x + r * 1.15f, y + r * .85f); shape.lineTo(x - r * 1.15f, y + r * .85f); shape.close()
-            drawPath(shape, color, alpha)
-        }
-        Kind.LINK -> {
-            shape.rewind()
-            shape.moveTo(x, y - r * 1.2f); shape.lineTo(x + r * 1.1f, y); shape.lineTo(x, y + r * 1.2f); shape.lineTo(x - r * 1.1f, y); shape.close()
-            drawPath(shape, color, alpha)
-        }
-    }
-}
-
-private fun DrawScope.drawMap(c: MapController, colors: MapColors, tm: TextMeasurer, tmp: FloatArray, shape: Path) {
+private fun DrawScope.drawScene(
+    c: MapController, colors: MapColors, st: Styles, tm: TextMeasurer, path: Path, t5: FloatArray, t5b: FloatArray,
+) {
+    val sc = c.scene
     val g = c.graph
     if (g.size == 0) return
     val w = size.width; val h = size.height
-    val gm = c.globeMix
+    val gm = sc.gm; val u = sc.u
+    val pr = sc.projector
     val dens = density
-    val small = TextStyle(fontSize = 11.sp, color = colors.inkSecondary)
-    val rootX = w / 2f + c.panX; val rootY = h / 2f + c.panY
-    val R = Projection.base(w, h) * c.zoom
+    val cx = w / 2f + c.panX; val cy = h / 2f + c.panY
 
     // Globe body: one flat disc and a hairline limb.
     if (gm > 0.02f) {
-        drawCircle(colors.surface, R, Offset(rootX, rootY), alpha = gm)
-        drawCircle(colors.hairline, R, Offset(rootX, rootY), alpha = gm, style = Stroke(1f * dens))
+        val rs = pr.silhouette
+        drawCircle(colors.surface, rs, Offset(cx, cy), alpha = gm)
+        drawCircle(colors.hairline, rs, Offset(cx, cy), alpha = gm, style = Stroke(1f * dens))
     }
 
-    // Guides for the flat views.
+    // Thin guide rings: around each area on the globe, and by kind on the Rings view.
+    val ringAlpha = gm * 0.9f * (1f - Projector.smooth(1.4f, 3f, u))
+    if (ringAlpha > 0.02f) {
+        for (a in 0 until sc.areaCount) {
+            path.rewind()
+            var pen = false
+            for (k in 0..Scene.RING_N) {
+                val front = sc.ringPoint(a, k % Scene.RING_N, t5)
+                if (front) { if (!pen) { path.moveTo(t5[0], t5[1]); pen = true } else path.lineTo(t5[0], t5[1]) } else pen = false
+            }
+            drawPath(path, Color(sc.areaColor[a]), alpha = 0.22f * ringAlpha * (if (c.isolated >= 0 && c.isolated != a) 0.3f else 1f), style = Stroke(1f * dens))
+        }
+    }
     if (gm < 0.98f) {
         val a = 1f - gm
-        when (c.view) {
-            ViewMode.RINGS -> {
-                val labels = listOf("note" to .38f, "repo" to .58f, "file" to .76f, "issue" to .9f, "link" to 1.06f)
-                for ((name, rr) in labels) {
-                    drawCircle(colors.hairline, rr * R, Offset(rootX, rootY), alpha = a, style = Stroke(1f * dens))
-                    val t = tm.measure(name, small)
-                    drawText(t, topLeft = Offset(rootX - t.size.width / 2f, rootY - rr * R - t.size.height - 2 * dens), alpha = a)
-                }
+        if (c.view == ViewMode.RINGS) {
+            val base = Projector.baseSize(w, h) * u
+            for (k in KIND_RINGS.indices) {
+                val rr = KIND_RINGS[k] * base
+                drawCircle(colors.hairline, rr, Offset(cx, cy), alpha = a, style = Stroke(1f * dens))
+                val t = tm.measure(KIND_RING_NAMES[k], st.guide)
+                drawText(t, topLeft = Offset(cx - t.size.width / 2f, cy - rr - t.size.height - 2 * dens), alpha = a)
             }
-            ViewMode.TIMELINE -> {
-                val older = tm.measure("older", small); val newer = tm.measure("newer", small)
-                drawText(older, topLeft = Offset(rootX - R, rootY + R * 1.02f), alpha = a)
-                drawText(newer, topLeft = Offset(rootX + R - newer.size.width, rootY + R * 1.02f), alpha = a)
-            }
-            else -> {}
+        } else if (c.view == ViewMode.TIMELINE) {
+            val base = Projector.baseSize(w, h) * u
+            val older = tm.measure("older", st.guide); val newer = tm.measure("newer", st.guide)
+            drawText(older, topLeft = Offset(cx - base, cy + base * 1.02f), alpha = a)
+            drawText(newer, topLeft = Offset(cx + base - newer.size.width, cy + base * 1.02f), alpha = a)
         }
     }
 
-    // Collect screen positions once.
-    val n = g.size
-    val sx = FloatArray(n); val sy = FloatArray(n); val vis = FloatArray(n); val depth = FloatArray(n)
-    for (i in 0 until n) {
-        c.position(i, tmp)
-        Projection.toScreen(tmp[0], tmp[1], tmp[2], c.yaw, c.pitch, c.zoom, w, h, c.panX, c.panY, tmp)
-        sx[i] = tmp[0]; sy[i] = tmp[1]; depth[i] = tmp[2]; vis[i] = visibility(gm, tmp[2])
-    }
-
-    val sel = c.selected
-    val neighbours = if (sel >= 0) (g.neighbours(sel) + sel).toSet() else emptySet()
-    val searching = c.hits.isNotEmpty()
-
-    // Links: all of them in the Links view, otherwise only the selection's.
-    val showAll = c.view == ViewMode.LINKS && sel < 0 && gm < 0.5f
-    for (l in g.links) {
-        val touches = sel >= 0 && (l[0] == sel || l[1] == sel)
-        if (!touches && !showAll) continue
-        val a = l[0]; val b = l[1]
-        if (c.isolated >= 0 && (g.areaIndex[a] != c.isolated || g.areaIndex[b] != c.isolated) && !touches) continue
-        val alpha = min(vis[a], vis[b]) * if (touches) 0.7f else 0.22f
-        if (alpha < 0.03f) continue
-        val col = Color(g.areas[g.areaIndex[if (touches) sel else a]].color)
-        if (gm > 0.3f) {
-            // Lift the arc away from the sphere so it does not cut through it.
-            val mx = (sx[a] + sx[b]) / 2f; val my = (sy[a] + sy[b]) / 2f
-            val lift = 1f + gm * 0.25f
-            val cx = rootX + (mx - rootX) * lift; val cy = rootY + (my - rootY) * lift
-            shape.rewind(); shape.moveTo(sx[a], sy[a]); shape.quadraticBezierTo(cx, cy, sx[b], sy[b])
-            drawPath(shape, col, alpha, Stroke(1.6f * dens))
-        } else {
-            drawLine(col, Offset(sx[a], sy[a]), Offset(sx[b], sy[b]), strokeWidth = (if (touches) 1.6f else 1f) * dens, alpha = alpha)
+    // Links: arcs on the globe when close, lines on flat views. All of them on the Links view.
+    val sel = sc.selected
+    val flatAll = c.view == ViewMode.LINKS && sel < 0 && gm < 0.5f
+    val arcA = if (flatAll) 1f else sc.arcAlpha
+    if (arcA > 0.02f || sel >= 0) {
+        sc.arcsDrawn = 0
+        for (pass in 0..1) {
+            if (pass == 1 && sel < 0 && arcA <= 0.02f) break
+            for (k in sc.la.indices) {
+                val a = sc.la[k]; val b = sc.lb[k]
+                val touches = sel >= 0 && (a == sel || b == sel)
+                if (pass == 0 && !touches) continue
+                if (pass == 1 && (touches || (sel >= 0) || arcA <= 0.02f)) continue
+                val fa = minOf(sc.fa[a], sc.fa[b])
+                if (fa < 0.05f) continue
+                if (!touches && sc.arcsDrawn >= MAX_ARCS) break
+                val col = Color(sc.colors[if (touches) sel else a])
+                val alpha = fa * if (touches) 0.75f else 0.4f * arcA
+                if (alpha < 0.03f) continue
+                val width = (if (touches) 1.4f else 1f) * sc.linkWidth
+                if (gm > 0.3f) {
+                    sc.arcControl(a, b, t5)
+                    path.rewind(); path.moveTo(sc.sx[a], sc.sy[a]); path.quadraticBezierTo(t5[0], t5[1], sc.sx[b], sc.sy[b])
+                    drawPath(path, col, alpha, Stroke(width))
+                    if (sc.expand > 0.3f && touchesFocus(sc, a, b) && sc.arcsDrawn < MAX_LINK_LABELS) {
+                        val label = Graph.LINK_LABELS[sc.lt[k].coerceIn(0, Graph.LINK_LABELS.size - 1)]
+                        val tt = tm.measure(label, st.linkLabel)
+                        drawText(tt, topLeft = Offset(t5[0] - tt.size.width / 2f, t5[1] - tt.size.height / 2f), alpha = sc.expand * fa)
+                    }
+                } else {
+                    drawLine(col, Offset(sc.sx[a], sc.sy[a]), Offset(sc.sx[b], sc.sy[b]), strokeWidth = width, alpha = alpha)
+                }
+                sc.arcsDrawn++
+            }
         }
     }
 
     // Nodes, back to front.
-    val order = (0 until n).sortedBy { depth[it] }
-    for (i in order) {
-        if (vis[i] < 0.02f) continue
-        val dim = (c.isolated >= 0 && g.areaIndex[i] != c.isolated) ||
-            (sel >= 0 && i !in neighbours) || (searching && i !in c.hits)
-        val shade = 1f - gm * 0.45f * (1f - depth[i].coerceIn(0f, 1f))
-        val a = vis[i] * shade * (if (dim) 0.16f else 1f)
-        val r = nodeRadius(c, i, dens)
-        val col = Color(g.areas[g.areaIndex[i]].color)
-        if (i == sel) drawCircle(col, r * 2.6f, Offset(sx[i], sy[i]), alpha = 0.16f)
-        drawKind(g.entries[i].kind, sx[i], sy[i], r, col, a, shape)
-        if (i == sel || (searching && i in c.hits)) {
-            drawCircle(colors.ink, r + 4f * dens, Offset(sx[i], sy[i]), alpha = if (i == sel) 0.9f else 0.6f, style = Stroke(1.5f * dens))
+    for (k in 0 until sc.n) {
+        val i = sc.order[k]
+        val a = sc.fa[i]
+        if (a < 0.02f) continue
+        val x = sc.sx[i]; val y = sc.sy[i]; val r = sc.rad[i]
+        val col = Color(sc.colors[i])
+        if (i == sel) drawCircle(col, r * 2.6f, Offset(x, y), alpha = 0.16f)
+        drawKindGlyph(sc.kinds[i], x, y, r, col, a, path)
+        if (i == sel || sc.isHit(i)) {
+            drawCircle(colors.ink, r + 4f * dens, Offset(x, y), alpha = (if (i == sel) 0.9f else 0.6f) * minOf(1f, a * 2f), style = Stroke(1.5f * dens))
         }
     }
 
-    // Labels: area names, then the selection and its first neighbours.
-    val areaStyle = TextStyle(fontSize = 12.sp, color = colors.ink)
-    fun label(i: Int, strong: Boolean) {
-        if (vis[i] < 0.5f) return
-        val title = g.entries[i].title.let { if (it.length > 26) it.take(25) + "…" else it }
-        val t = tm.measure(title, TextStyle(fontSize = 11.sp, color = if (strong) colors.ink else colors.inkSecondary))
-        val r = nodeRadius(c, i, dens)
-        val x = (sx[i] - t.size.width / 2f).coerceIn(4f * dens, w - t.size.width - 4f * dens)
-        drawRect(colors.surface, Offset(x - 4 * dens, sy[i] - r - t.size.height - 6 * dens), androidx.compose.ui.geometry.Size(t.size.width + 8 * dens, t.size.height + 2 * dens), alpha = 0.9f)
-        drawText(t, topLeft = Offset(x, sy[i] - r - t.size.height - 5 * dens))
+    // Cluster names at the far levels, cross-faded out as nodes take over.
+    if (sc.clusterAlpha > 0.02f && sel < 0) {
+        for (a in 0 until sc.areaCount) {
+            val al = sc.areaA[a]
+            if (al < 0.02f) continue
+            val t = tm.measure(sc.areaName[a], st.cluster)
+            val n = tm.measure(sc.areaTotal[a], st.count)
+            drawText(t, topLeft = Offset(sc.areaX[a] - t.size.width / 2f, sc.areaY[a] - t.size.height / 2f), alpha = al)
+            drawText(n, topLeft = Offset(sc.areaX[a] - n.size.width / 2f, sc.areaY[a] + t.size.height / 2f), alpha = al * 0.85f)
+        }
     }
-    if (sel >= 0) {
-        label(sel, true)
-        g.neighbours(sel).take(4).forEach { label(it, false) }
-    } else if (searching) {
-        c.hits.take(6).forEach { label(it, false) }
-    } else if (c.zoom < 2.2f) {
-        val v = Projection.base(w, h)
-        g.areas.forEachIndexed { ai, area ->
-            if (c.isolated >= 0 && c.isolated != ai) return@forEachIndexed
-            val (px, py, alpha) = areaLabelAnchor(c, ai, tmp, w, h, v)
-            if (alpha < 0.05f) return@forEachIndexed
-            val t = tm.measure(area.name, areaStyle)
-            drawText(t, topLeft = Offset(px - t.size.width / 2f, py - t.size.height / 2f), alpha = alpha)
+
+    // Node labels: short names, then full names with a snippet as the camera closes in.
+    val sz = sc.labelSize
+    for (k in 0 until sc.labelCount) {
+        val i = sc.labelNode[k]
+        val a = sc.fa[i]
+        if (a < 0.1f) continue
+        val forced = sc.labelForced[k]
+        val full = sc.labelFull[k]
+        val strong = i == sel
+        val nameA = if (forced) 1f else sc.nameAlpha
+        val showFull = full && (forced || sc.fullAlpha > 0.02f)
+        val fullA = if (forced) 1f else sc.fullAlpha
+        val x = sc.sx[i]; val r = sc.rad[i]
+        val style = if (strong) st.ink[sz] else st.sec[sz]
+        if (showFull) {
+            val t = tm.measure(sc.fullTitle[i], style)
+            val d = tm.measure(sc.detail[i], st.detail[sz])
+            val tx = (x - t.size.width / 2f).coerceIn(4f * dens, maxOf(4f * dens, w - t.size.width - 4f * dens))
+            val top = sc.sy[i] - r - t.size.height - d.size.height - 3f * dens
+            drawRect(colors.surface, Offset(tx - 3 * dens, top - 1 * dens), androidx.compose.ui.geometry.Size(maxOf(t.size.width, d.size.width) + 6 * dens, t.size.height + d.size.height + 2 * dens), alpha = 0.85f * a * fullA)
+            drawText(t, topLeft = Offset(tx, top), alpha = a * fullA * nameA)
+            drawText(d, topLeft = Offset(tx, top + t.size.height), alpha = a * fullA * nameA)
+        } else {
+            val t = tm.measure(sc.shortTitle[i], style)
+            val tx = (x - t.size.width / 2f).coerceIn(4f * dens, maxOf(4f * dens, w - t.size.width - 4f * dens))
+            val ty = sc.sy[i] - r - t.size.height - 3f * dens
+            drawRect(colors.surface, Offset(tx - 3 * dens, ty), androidx.compose.ui.geometry.Size(t.size.width + 6 * dens, t.size.height.toFloat()), alpha = 0.8f * a * nameA)
+            drawText(t, topLeft = Offset(tx, ty), alpha = a * nameA)
         }
     }
 }
 
-/** Where an area's name sits: the average of its nodes' screen positions, faded when facing away. */
-private fun areaLabelAnchor(c: MapController, area: Int, tmp: FloatArray, w: Float, h: Float, @Suppress("UNUSED_PARAMETER") base: Float): Triple<Float, Float, Float> {
-    var x = 0f; var y = 0f; var z = 0f; var k = 0
-    val g = c.graph
-    val sum = FloatArray(3)
-    for (i in 0 until g.size) {
-        if (g.areaIndex[i] != area) continue
-        c.position(i, tmp)
-        sum[0] += tmp[0]; sum[1] += tmp[1]; sum[2] += tmp[2]; k++
-    }
-    if (k == 0) return Triple(0f, 0f, 0f)
-    val len = if (c.globeMix > 0.5f) max(1e-3f, sqrt(sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2])) else k.toFloat()
-    val mean = if (c.globeMix > 0.5f) floatArrayOf(sum[0] / len, sum[1] / len, sum[2] / len) else floatArrayOf(sum[0] / k, sum[1] / k, sum[2] / k)
-    Projection.toScreen(mean[0], mean[1], mean[2], c.yaw, c.pitch, c.zoom, w, h, c.panX, c.panY, tmp)
-    x = tmp[0]; y = tmp[1]; z = tmp[2]
-    val alpha = visibility(c.globeMix, z) * (if (c.globeMix > 0.5f) ((z - 0.1f) * 1.6f).coerceIn(0f, 1f) else 1f)
-    // Sit just above the cluster so the name does not cover its nodes.
-    return Triple(x, y - Projection.base(w, h) * c.zoom * 0.2f, alpha)
+private fun touchesFocus(sc: Scene, a: Int, b: Int) = sc.focusArea >= 0 && sc.areaOf[a] == sc.focusArea && sc.areaOf[b] == sc.focusArea
+
+private fun DrawScope.drawDebug(c: MapController, st: Styles, tm: TextMeasurer) {
+    val sc = c.scene
+    val line = "draw %.1f ms (max %.1f) · %d nodes · %d labels · %d arcs · zoom %.1f".format(c.drawMsAvg, c.drawMsMax, sc.nodesDrawn, sc.labelCount, sc.arcsDrawn, c.zoom)
+    val t = tm.measure(line, st.debug)
+    drawRect(Color.Black, Offset(0f, 64f * density), androidx.compose.ui.geometry.Size(t.size.width + 12f * density, t.size.height + 6f * density), alpha = 0.6f)
+    drawText(t, topLeft = Offset(6f * density, 67f * density), color = Color.White)
 }
+
+private const val MAX_ARCS = 160
+private const val MAX_LINK_LABELS = 14

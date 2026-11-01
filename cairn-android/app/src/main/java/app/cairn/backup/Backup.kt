@@ -33,7 +33,7 @@ object Backup {
     const val MIN_PASSPHRASE = 8
 
     /** Files that belong in a backup, relative to the data root. */
-    private fun included(rel: String) = rel.startsWith("notes/") || rel == "github.json" || rel == "index.json"
+    private fun included(rel: String) = rel.startsWith("notes/") || rel == "github.json" || rel == "github-docs.bin" || rel == "index.json"
 
     fun pack(root: File): ByteArray {
         val bos = ByteArrayOutputStream()
@@ -69,6 +69,7 @@ object Backup {
             if (!File(staging, "notes").isDirectory) throw BackupException("This backup holds no notes.")
             File(root, "notes").deleteRecursively()
             File(root, "github.json").delete()
+            File(root, "github-docs.bin").delete()
             File(root, "index.json").delete()
             staging.walkTopDown().filter { it.isFile }.forEach { f ->
                 val dest = File(root, f.relativeTo(staging).path)

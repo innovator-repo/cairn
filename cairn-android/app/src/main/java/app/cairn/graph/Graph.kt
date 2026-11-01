@@ -115,9 +115,9 @@ class Graph(
             val names = counts.keys.sortedWith(compareByDescending<String> { counts.getValue(it) }.thenBy { it })
             val n = names.size
             return names.mapIndexed { i, name ->
-                val lat = if (n == 1) 0f else (asin(1f - 2f * (i + .5f) / n) * .8f)
-                // Few areas share about 230 degrees of longitude so most face the viewer at first; many use the full circle.
-                val span = if (n <= 6) 1.3f * PI.toFloat() else TAU
+                val lat = if (n == 1) 0f else (asin(1f - 2f * (i + .5f) / n) * .6f)
+                // Few areas share about 170 degrees of longitude so they all face the viewer at first; many use the full circle.
+                val span = if (n <= 6) 0.95f * PI.toFloat() else TAU
                 val lon = if (n == 1) 0f else (((i * 0.6180339f) % 1f) - .5f) * span
                 AreaInfo(name, PALETTE[i % PALETTE.size], lat, lon, counts.getValue(name))
             }
@@ -129,10 +129,10 @@ class Graph(
             val vecs = entries.map { embedder.embed(it.searchable) }
             val seen = HashSet<Long>()
             val out = ArrayList<IntArray>()
-            fun add(a: Int, b: Int) {
+            fun add(a: Int, b: Int, type: Int = LINK_SIMILAR) {
                 if (a == b) return
                 val lo = min(a, b); val hi = max(a, b)
-                if (seen.add(lo.toLong() * n + hi)) out += intArrayOf(lo, hi)
+                if (seen.add(lo.toLong() * n + hi)) out += intArrayOf(lo, hi, type)
             }
             for (i in 0 until n) {
                 val ranked = ArrayList<Pair<Int, Float>>()
@@ -144,19 +144,24 @@ class Graph(
                 ranked.sortByDescending { it.second }
                 for ((j, _) in ranked.take(2)) add(i, j)
             }
+            val repoByPath = entries.withIndex().filter { it.value.kind == Kind.REPO }.associate { it.value.path to it.index }
             val byTitle = entries.withIndex().associate { (i, e) -> e.title.lowercase() to i }
             val wiki = Regex("\\[\\[([^\\]]+)]]")
             for ((i, e) in entries.withIndex()) {
-                for (m in wiki.findAll(e.text)) byTitle[m.groupValues[1].trim().lowercase()]?.let { add(i, it) }
-                if (e.kind == Kind.ISSUE) {
-                    val repo = e.path.substringBefore('#')
-                    entries.indexOfFirst { it.kind == Kind.REPO && it.path == repo }.takeIf { it >= 0 }?.let { add(i, it) }
+                for (m in wiki.findAll(e.text)) byTitle[m.groupValues[1].trim().lowercase()]?.let { add(i, it, LINK_WIKI) }
+                if (e.kind == Kind.ISSUE || e.kind == Kind.FILE) {
+                    val repo = if (e.kind == Kind.ISSUE) e.path.substringBefore('#') else e.path.split('/').take(2).joinToString("/")
+                    repoByPath[repo]?.let { add(i, it, LINK_IN_REPO) }
                 }
             }
             return out
         }
 
         const val MIN_LINK = 0.10f
+        const val LINK_SIMILAR = 0
+        const val LINK_WIKI = 1
+        const val LINK_IN_REPO = 2
+        val LINK_LABELS = arrayOf("similar", "links to", "in repo")
 
         /** A one-off force layout seeded from the Areas view, scaled to fit the unit square. */
         fun forceLayout(seed: FloatArray, links: List<IntArray>, n: Int): FloatArray {
