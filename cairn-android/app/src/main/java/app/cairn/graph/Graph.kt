@@ -40,10 +40,8 @@ class Graph(
     companion object {
         val EMPTY = Graph(emptyList(), emptyList(), emptyList(), IntArray(0), ViewMode.entries.associateWith { FloatArray(0) }, IntArray(0))
 
-        /** Flat, calm area colours. They read on both the dark and the light page. */
-        val PALETTE = longArrayOf(
-            0xFF5B9BE6, 0xFFE57F6F, 0xFF9A8CE8, 0xFF4FBF9A, 0xFFE0B040, 0xFFD97AB0, 0xFF4DB6C4, 0xFFA3B84F,
-        )
+        /** The amber-gold family used on the map, with a hue shift between areas. */
+        val PALETTE = app.cairn.map.MapPalette.AREAS
 
         fun build(entries: List<Entry>, embedder: Embedder, now: Long = System.currentTimeMillis()): Graph {
             if (entries.isEmpty()) return EMPTY
@@ -58,7 +56,8 @@ class Graph(
             val areasPos = FloatArray(3 * n)
             val time = FloatArray(3 * n)
             val maxAge = max(1.0, entries.maxOf { (now - it.updatedAt) / NoteStore.DAY.toDouble() })
-            val spread = (0.55f / sqrt(areas.size.toFloat())).coerceIn(0.12f, 0.3f)
+            // Tight, atom-like clusters; a big area (a GitHub account with hundreds of items) gets a wider one.
+            val spreadBase = (0.34f / sqrt(areas.size.toFloat())).coerceIn(0.08f, 0.2f)
             for (i in 0 until n) {
                 val e = entries[i]
                 val a = areas[areaIdx[i]]
@@ -66,6 +65,7 @@ class Graph(
                 val c = vec(a.lat, a.lon)
                 val e1 = floatArrayOf(cos(a.lon), 0f, -sin(a.lon))
                 val e2 = floatArrayOf(c[1] * e1[2] - c[2] * e1[1], c[2] * e1[0] - c[0] * e1[2], c[0] * e1[1] - c[1] * e1[0])
+                val spread = spreadBase * sqrt(a.count / 25f).coerceIn(0.8f, 2.5f)
                 val x = gauss(rnd) * spread
                 val y = gauss(rnd) * spread
                 val p = FloatArray(3) { c[it] + e1[it] * x + e2[it] * y }

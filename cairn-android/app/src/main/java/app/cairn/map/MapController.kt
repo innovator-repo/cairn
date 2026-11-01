@@ -51,6 +51,9 @@ class MapController(private val scope: CoroutineScope) {
 
     val scene = Scene()
 
+    /** Animation clock in seconds; advances every frame while motion is on, so the canvas redraws. */
+    var clock by mutableFloatStateOf(0f); private set
+
     /** Debug overlay: shown when true. */
     var debug by mutableStateOf(false)
     /** False when the system animation scale is off: everything snaps, nothing spins. */
@@ -64,6 +67,10 @@ class MapController(private val scope: CoroutineScope) {
         drawMsMax = if (frames % 120 == 0) ms else maxOf(drawMsMax, ms)
         frames++
     }
+
+    /** Set while something covers the map (the open sheet): the ambient clock stops, so nothing redraws. */
+    var paused = false
+    private var ambient = 0f
 
     private var from = FloatArray(0)
     private var job: Job? = null
@@ -189,7 +196,9 @@ class MapController(private val scope: CoroutineScope) {
             val frac = (1f - 1f / f).coerceIn(0f, 1f)
             // Drift towards the node nearest the fingers, else the surface point under them.
             val near = scene.nearestScreen(w / 2f + fx, h / 2f + fy, 140f * scene.density)
+            val eng = if (near < 0) scene.nearestEngram(w / 2f + fx, h / 2f + fy, 140f * scene.density) else -1
             if (near >= 0) turnToward(scene.wx[near], scene.wy[near], scene.wz[near], frac)
+            else if (eng >= 0) { scene.areaCentre(eng, tmp); turnToward(tmp[0], tmp[1], tmp[2], frac) }
             else if (scene.projector.surfacePoint(w / 2f + fx, h / 2f + fy, tmp)) turnToward(tmp[0], tmp[1], tmp[2], frac)
         }
         zoom = z
@@ -207,6 +216,12 @@ class MapController(private val scope: CoroutineScope) {
 
     /** Called every frame while the map is on screen: inertia and the idle turn. */
     fun tick(dt: Float) {
+        scene.motion = animate
+        if (animate && !paused) {
+            // Ambient motion (shells, particles, scan, packets) runs at about 30 fps to spare the battery.
+            ambient += dt
+            if (ambient >= AMBIENT_STEP) { scene.advance(ambient); clock += ambient; ambient = 0f }
+        }
         if (touching || !animate) { if (touching) idle = 0f; return }
         idle += dt
         if (flying) return
@@ -230,9 +245,20 @@ class MapController(private val scope: CoroutineScope) {
     /** Glide the camera so node [i] is centred, at zoom at least [minZoom]. */
     fun flyTo(i: Int, minZoom: Float = 3f) {
         if (i < 0 || i >= graph.size) return
-        job?.cancel(); stopInertia()
         position(i, tmp)
-        val px = tmp[0]; val py = tmp[1]; val pz = tmp[2]
+        flyToPoint(tmp[0], tmp[1], tmp[2], minZoom)
+    }
+
+    /** Fly to an area's engram and open it up. */
+    fun flyToArea(a: Int, minZoom: Float = 2.6f) {
+        if (a < 0 || a >= graph.areas.size) return
+        scene.areaCentre(a, tmp)
+        select(-1)
+        flyToPoint(tmp[0], tmp[1], tmp[2], minZoom)
+    }
+
+    private fun flyToPoint(px: Float, py: Float, pz: Float, minZoom: Float) {
+        job?.cancel(); stopInertia()
         val y0 = yaw; val p0 = pitch; val z0 = zoom; val x0 = panX; val yy0 = panY; val r0 = roll
         val zT = maxOf(minZoom, zoom).coerceAtMost(maxZoom())
         val globe = view == ViewMode.GLOBE
@@ -297,6 +323,7 @@ class MapController(private val scope: CoroutineScope) {
         const val MAX_SPIN = 6f
         const val IDLE_DELAY = 2.5f
         const val IDLE_SPIN = 0.05f
+        const val AMBIENT_STEP = 1f / 30f
         const val DURATION_MS = 900
         const val FLY_MS = 700
         val EASE = CubicBezierEasing(0.22f, 0.61f, 0.36f, 1f)

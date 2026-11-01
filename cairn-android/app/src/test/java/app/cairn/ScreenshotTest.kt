@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.click
@@ -77,14 +78,13 @@ class ScreenshotTest {
         File(dir, "$name.png").outputStream().use { frame().compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
-    private fun pinchIn(times: Int = 1) {
-        repeat(times) {
-            rule.onNodeWithTag("map").performTouchInput {
-                val c = center
-                pinch(c + Offset(-80f, 0f), c + Offset(-160f, 0f), c + Offset(80f, 0f), c + Offset(160f, 0f), 300)
-            }
-            rule.waitForIdle()
+    /** A two-finger pinch that multiplies the zoom by about [factor]. */
+    private fun pinchBy(factor: Float = 2f) {
+        rule.onNodeWithTag("map").performTouchInput {
+            val c = center
+            pinch(c + Offset(-80f, 0f), c + Offset(-80f * factor, 0f), c + Offset(80f, 0f), c + Offset(80f * factor, 0f), 300)
         }
+        rule.waitForIdle()
     }
 
     @Test fun seededMapIsFullAndSheetIsClosed() {
@@ -136,16 +136,30 @@ class ScreenshotTest {
         shot("search-results")
     }
 
-    @Test fun searchFliesToTheNodeThenTheClusterOpens() {
-        vm.setFrameTimes(true)
+    @Test fun searchFliesToTheNodeAndHighlightsTheHit() {
         rule.onNodeWithTag("search").performTextInput("kanji")
         rule.waitUntil(5_000) { rule.onAllNodesWithText("Results").fetchSemanticsNodes().isNotEmpty() }
         rule.mainClock.advanceTimeBy(600)
         rule.waitForIdle()
         shot("search-fly")
-        pinchIn()
-        shot("globe-nucleus")
-        
+    }
+
+    @Test fun pickingANoteFliesInAndTheClusterOpens() {
+        vm.setFrameTimes(true)
+        val first = vm.graph.entries.sortedByDescending { it.updatedAt }.first().title
+        rule.onNodeWithTag("sheetHeader").performTouchInput { swipeUp() }
+        rule.waitForIdle()
+        rule.onAllNodesWithText(first).onFirst().performClick()
+        rule.waitForIdle()
+        shot("selected") // the node card, its link arcs and the full label
+        // Tap empty space to drop the selection and the card, then keep zooming into the cluster.
+        rule.onNodeWithTag("map").performTouchInput { click(Offset(24f, height * 0.5f)) }
+        rule.waitForIdle()
+        shot("globe-near")
+        pinchBy(1.5f)
+        shot("globe-near-2")
+        pinchBy(1.5f)
+        shot("globe-close")
     }
 
     @Test fun zoomLevelsAndFlatViews() {
@@ -160,15 +174,14 @@ class ScreenshotTest {
         vm.setFrameTimes(true)
         rule.waitForIdle()
         measure("far"); shot("globe-far")
-        pinchIn(); measure("mid"); shot("globe-mid")
-        pinchIn(); measure("near"); shot("globe-near")
-        pinchIn(); measure("closer"); shot("globe-closer")
+        pinchBy(); measure("mid"); shot("globe-mid")
+        pinchBy(); measure("deeper"); shot("globe-deeper")
         vm.setFrameTimes(false)
         rule.onNodeWithText("Links").performClick(); rule.waitForIdle(); shot("links")
         rule.onNodeWithText("Areas").performClick(); rule.waitForIdle(); shot("areas")
         rule.onNodeWithText("Rings").performClick(); rule.waitForIdle(); shot("rings")
         rule.onNodeWithText("Timeline").performClick(); rule.waitForIdle(); shot("timeline")
         println("PERF whole-window software draw per frame: $perf")
-        assertEquals(4, perf.toString().trim().split(" ").size)
+        assertEquals(3, perf.toString().trim().split(" ").size)
     }
 }

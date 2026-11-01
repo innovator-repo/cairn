@@ -113,7 +113,7 @@ fun SettingsScreen(vm: CairnViewModel, onBack: () -> Unit) {
                 }
             }
             if (vm.message.isNotBlank()) Text(vm.message, color = c.ink, style = MaterialTheme.typography.bodyMedium)
-            Text("Cairn 0.2.0 · notes stay on this phone", color = c.inkSecondary, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 24.dp))
+            Text("Cairn 0.3.0 · notes stay on this phone", color = c.inkSecondary, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 24.dp))
         }
     }
 

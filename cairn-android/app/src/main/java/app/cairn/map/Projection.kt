@@ -24,6 +24,9 @@ class Projector {
     private var gm = 1f
     private var cx = 0f; private var cyScr = 0f
     var silhouette = 1f; private set
+    /** Screen centre of the globe, px. */
+    val centreX: Float get() = cx
+    val centreY: Float get() = cyScr
 
     fun set(yaw: Float, pitch: Float, roll: Float, u: Float, globeMix: Float, w: Float, h: Float, panX: Float, panY: Float) {
         cy = cos(yaw); sy = sin(yaw); cp = cos(pitch); sp = sin(pitch); cr = cos(roll); sr = sin(roll)

@@ -73,6 +73,7 @@ import app.cairn.graph.Graph
 import app.cairn.graph.ViewMode
 import app.cairn.map.MapCanvas
 import app.cairn.map.MapColors
+import app.cairn.map.MapPalette
 import app.cairn.map.MapController
 import app.cairn.search.TextHit
 import kotlinx.coroutines.Dispatchers
@@ -106,6 +107,7 @@ fun MainScreen(
         map.highlight(hits.mapNotNull { idOf[it.doc.entryId] }.toSet())
         hits.firstOrNull()?.let { best -> idOf[best.doc.entryId]?.let { map.select(it); map.flyTo(it) } }
     }
+    map.paused = sheet.expanded
     BackHandler(enabled = sheet.expanded) { sheet.collapse() }
 
     val peek = 170.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -118,9 +120,9 @@ fun MainScreen(
             LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(ViewMode.entries.toList()) { v -> Pill(v.label, { map.showView(v) }, selected = v == map.view) }
             }
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+            Box(Modifier.weight(1f).fillMaxWidth().background(MapPalette.BG)) {
                 MapCanvas(
-                    map, MapColors(c.grouped, c.hairline, c.ink, c.inkSecondary),
+                    map, MapColors(MapPalette.DISC, MapPalette.LINE, MapPalette.CREAM, MapPalette.SOFT, MapPalette.MUTE),
                     onTapNode = { map.select(it) }, onTapEmpty = { map.select(-1) },
                 )
                 SearchField(query, { query = it }, results.size, Modifier.align(Alignment.TopCenter).padding(horizontal = 12.dp, vertical = 4.dp))

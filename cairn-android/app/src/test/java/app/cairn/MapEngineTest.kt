@@ -4,6 +4,8 @@ import app.cairn.data.Entry
 import app.cairn.data.Kind
 import app.cairn.data.Shape
 import app.cairn.graph.Graph
+import app.cairn.map.Geo
+import app.cairn.map.MapPalette
 import app.cairn.map.Projector
 import app.cairn.search.TfidfEmbedder
 import org.junit.Assert.assertEquals
@@ -120,5 +122,35 @@ class MapEngineTest {
         println("PERF graph build ${entries.size} nodes, ${g.links.size} links: ${(System.nanoTime() - t0) / 1_000_000} ms")
         assertTrue(g.links.size > entries.size / 2)
         assertTrue(g.areas.size >= 6)
+    }
+
+    @Test fun instrumentGeometryMatchesTheBrief() {
+        assertEquals(4, Geo.shells.size)
+        assertTrue("particles within 400..800", Geo.PN in 400..800)
+        assertEquals(3, Geo.rings.size)
+        assertEquals("an icosahedron has 30 edges", 60, Geo.icoE.size)
+        assertEquals(3, Geo.NUC_R.size)
+        // Shells are nested and counter-rotate.
+        assertTrue(Geo.SHELL_R.toList().zipWithNext().all { it.first > it.second })
+        assertTrue(Geo.SHELL_SPIN.any { it > 0 } && Geo.SHELL_SPIN.any { it < 0 })
+        // Every particle sits on one of the shells.
+        for (i in 0 until Geo.PN) {
+            val r = Math.sqrt((Geo.pX[i] * Geo.pX[i] + Geo.pY[i] * Geo.pY[i] + Geo.pZ[i] * Geo.pZ[i]).toDouble()).toFloat()
+            assertEquals(Geo.SHELL_R[Geo.pShell[i]], r, 0.06f)
+        }
+    }
+
+    @Test fun areaColoursAreAWarmFamilyYetDistinct() {
+        fun hue(c: Long): Float {
+            val r = ((c shr 16) and 255) / 255f; val g = ((c shr 8) and 255) / 255f; val b = (c and 255) / 255f
+            val mx = maxOf(r, g, b); val mn = minOf(r, g, b); val d = mx - mn
+            val h = when { d == 0f -> 0f; mx == r -> ((g - b) / d) % 6f; mx == g -> (b - r) / d + 2f; else -> (r - g) / d + 4f }
+            return (h * 60f + 360f) % 360f
+        }
+        val hues = MapPalette.AREAS.map { hue(it) }
+        assertTrue("all warm, between orange-red and yellow: $hues", hues.all { it in 15f..60f })
+        assertEquals(8, MapPalette.AREAS.toSet().size)
+        assertTrue("hue spread of about 25 degrees or more", hues.max() - hues.min() >= 25f)
+        assertEquals(MapPalette.AREAS.size, app.cairn.graph.Graph.PALETTE.size)
     }
 }
